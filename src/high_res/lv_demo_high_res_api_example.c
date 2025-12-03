@@ -11,9 +11,13 @@
 #if LV_USE_DEMO_HIGH_RES
 
 /* see `wifi_ssid_observer_cb` */
-#if 0
-    #include <stdlib.h>
-#endif
+//#if 0
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <pthread.h>
+//#endif
 
 /*********************
  *      DEFINES
@@ -39,6 +43,7 @@ static void wifi_ssid_observer_cb(lv_observer_t * observer, lv_subject_t * subje
 /**********************
  *  STATIC VARIABLES
  **********************/
+static pthread_t evse_thread;
 
 /**********************
  *      MACROS
@@ -47,6 +52,7 @@ static void wifi_ssid_observer_cb(lv_observer_t * observer, lv_subject_t * subje
 /**********************
  *   GLOBAL FUNCTIONS
  **********************/
+extern void *evse_init(void *);
 
 void lv_demo_high_res_api_example(const char * assets_path, const char * logo_path, const char * slides_path)
 {
@@ -99,6 +105,9 @@ void lv_demo_high_res_api_example(const char * assets_path, const char * logo_pa
     lv_obj_add_event_cb(api->base_obj, delete_timer_cb, LV_EVENT_DELETE, door_timer);
 
     lv_subject_add_observer(&api->subjects.wifi_ssid, wifi_ssid_observer_cb, api);
+
+    /* initialize ev charging thread */
+    pthread_create(&evse_thread, NULL, evse_init, api);
 }
 
 /**********************

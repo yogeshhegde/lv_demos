@@ -10,12 +10,38 @@
 #undef LV_USE_PRIVATE_API
 #define LV_USE_PRIVATE_API	 1 /*Include the *_private.h LVGL headers too*/
 
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/select.h>
+#include <fcntl.h>
+#include <errno.h>
 #include "lv_demo_high_res_private.h"
+#include "evse.h"
 #if LV_USE_DEMO_HIGH_RES
 
 /*********************
  *      DEFINES
  *********************/
+#define RESUMED 1
+#define PAUSED 0
+
+/*********************
+ *  GLOBAL VARIABLE
+ *********************/
+
+extern char curr_ev_state[20];
+lv_obj_t * g_top_label;
+lv_obj_t * g_charging_status_box;
+lv_obj_t * g_charging_widget;
+lv_obj_t * g_charging_button_label;
+lv_obj_t * g_base_obj;
+lv_demo_high_res_ctx_t * g_c;
 
 /**********************
  *      TYPEDEFS
@@ -58,8 +84,8 @@ static void charging_status_box_clicked_cb(lv_event_t * e);
  *  STATIC VARIABLES
  **********************/
 
-static const char start_charging_string[] = "Start charging";
-static const char stop_charging_string[] = "Stop charging";
+static const char start_charging_string[] = "Resume Charging";
+static const char stop_charging_string[] = "Pause Charging";
 
 /**********************
  *      MACROS
@@ -72,6 +98,8 @@ static const char stop_charging_string[] = "Stop charging";
 void lv_demo_high_res_app_ev_charging(lv_obj_t * base_obj)
 {
     lv_demo_high_res_ctx_t * c = lv_obj_get_user_data(base_obj);
+    g_base_obj = base_obj;
+    g_c = c;
 
     /* background */
 
@@ -480,6 +508,56 @@ static lv_obj_t * create_widget3_info(lv_demo_high_res_ctx_t * c, lv_obj_t * par
     return label_number;
 }
 
+void update_widget3(void)
+{
+    if(strcmp(curr_ev_state, "Charging") == 0 || strcmp(curr_ev_state, "WaitingForEnergy") == 0) {
+
+        lv_label_set_text_static(g_top_label, "Charging");
+        lv_obj_set_style_bg_color(g_charging_status_box, lv_color_make(0xff, 0x00, 0x00), 0); // Red color
+        lv_obj_set_style_bg_opa(g_charging_status_box, LV_OPA_70, 0);
+        lv_label_set_text_static(g_charging_button_label, "Pause Charging");
+        lv_obj_remove_flag(g_charging_status_box, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(g_charging_status_box, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_image_src(g_charging_widget, g_c->imgs[IMG_EV_CHARGING_WIDGET3_BG], 0);
+        
+        //Start Animation
+        int32_t start_v = lv_subject_get_int(&g_c->ev_charging_progress);
+        if(start_v >= EV_CHARGING_RANGE_END) start_v = 0;
+        lv_anim_t a;
+        prepare_default_anim(&a, start_v, g_base_obj);
+        lv_anim_start(&a);
+
+    } else if(strcmp(curr_ev_state, "ChargingPausedEV") == 0 || strcmp(curr_ev_state, "ChargingPausedEVSE") == 0) {
+
+        lv_label_set_text_static(g_top_label, "Charging Paused");
+        lv_obj_set_style_bg_color(g_charging_status_box, lv_color_make(0x90, 0xff, 0x90), 0); // Green color
+        lv_obj_set_style_bg_opa(g_charging_status_box, LV_OPA_80, 0);
+        lv_label_set_text_static(g_charging_button_label, "Resume Charging");
+        lv_obj_remove_flag(g_charging_status_box, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(g_charging_status_box, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_image_src(g_charging_widget, g_c->imgs[IMG_EV_CHARGING_WIDGET3_1_BG], 0);
+
+        //Stop Animation
+        lv_anim_delete(g_base_obj, anim_exec_cb);
+
+    } else if(strcmp(curr_ev_state, "Finished") == 0 || strcmp(curr_ev_state, "FinishedEV") == 0
+                || strcmp(curr_ev_state, "FinishedEVSE") == 0) {
+        lv_label_set_text_static(g_top_label, "Charging Complete");
+        lv_obj_set_style_bg_color(g_charging_status_box, lv_color_make(0x1e, 0x90, 0xff), 0); // Dodger blue color
+        lv_obj_set_style_bg_opa(g_charging_status_box, LV_OPA_70, 0);
+        lv_label_set_text_static(g_charging_button_label, "Charging Finished");
+        lv_obj_remove_flag(g_charging_status_box, LV_OBJ_FLAG_HIDDEN | LV_OBJ_FLAG_CLICKABLE);
+
+        //Stop Animation
+        lv_anim_delete(g_base_obj, anim_exec_cb);
+
+    } else {
+
+        lv_obj_add_flag(g_charging_status_box, LV_OBJ_FLAG_HIDDEN); // Hide the widget
+
+    }
+}
+
 static void create_widget3(lv_demo_high_res_ctx_t * c, lv_obj_t * widgets)
 {
     lv_obj_t * bg_cont = lv_obj_get_parent(widgets);
@@ -496,12 +574,14 @@ static void create_widget3(lv_demo_high_res_ctx_t * c, lv_obj_t * widgets)
     lv_obj_set_style_bg_image_src(widget, c->imgs[is_animating ? IMG_EV_CHARGING_WIDGET3_BG : IMG_EV_CHARGING_WIDGET3_1_BG],
                                   0);
     anim_state->widget3 = widget;
+    g_charging_widget = widget;
 
-    lv_obj_t * top_label = lv_label_create(widget);
-    lv_label_set_text_static(top_label, "Charging");
+    lv_obj_t * top_label = lv_label_create(widget); 
+    lv_label_set_text_static(top_label, curr_ev_state);
     lv_obj_set_width(top_label, LV_PCT(100));
     lv_obj_add_style(top_label, &c->fonts[FONT_LABEL_MD], 0);
     lv_obj_set_style_text_color(top_label, lv_color_white(), 0);
+    g_top_label = top_label;
 
     lv_obj_t * arc = lv_arc_create(widget);
     lv_obj_set_size(arc, c->sz->ev_charging_arc_diameter, c->sz->ev_charging_arc_diameter);
@@ -536,6 +616,7 @@ static void create_widget3(lv_demo_high_res_ctx_t * c, lv_obj_t * widgets)
     lv_obj_set_style_radius(charging_status_box, LV_COORD_MAX, 0);
     lv_obj_add_flag(charging_status_box, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(charging_status_box, charging_status_box_clicked_cb, LV_EVENT_CLICKED, bg_cont);
+    g_charging_status_box = charging_status_box;
 
     lv_obj_t * charging_status_label = lv_label_create(charging_status_box);
     lv_obj_add_style(charging_status_label, &c->fonts[FONT_LABEL_SM], 0);
@@ -543,6 +624,7 @@ static void create_widget3(lv_demo_high_res_ctx_t * c, lv_obj_t * widgets)
     lv_obj_center(charging_status_label);
     lv_label_set_text_static(charging_status_label, is_animating ? stop_charging_string : start_charging_string);
     anim_state->charging_status_label = charging_status_label;
+    g_charging_button_label = charging_status_label;
 
     lv_obj_t * info_box = lv_demo_high_res_simple_container_create(widget, false, c->sz->gap[5], LV_FLEX_ALIGN_CENTER);
     lv_obj_set_width(info_box, LV_PCT(100));
@@ -550,6 +632,8 @@ static void create_widget3(lv_demo_high_res_ctx_t * c, lv_obj_t * widgets)
     anim_state->energy_consumed_label = create_widget3_info(c, info_box, c->imgs[IMG_ENERGY_ICON], "Energy\nconsumed",
                                                             "kW");
     anim_state->driving_range_label = create_widget3_info(c, info_box, c->imgs[IMG_RANGE_ICON], "Driving\nRange", "km");
+
+    update_widget3();
 }
 
 static void prepare_default_anim(lv_anim_t * a, int32_t start_v, lv_obj_t * base_obj)
@@ -572,6 +656,16 @@ static void charging_status_box_clicked_cb(lv_event_t * e)
     lv_obj_t * charging_status_label = lv_obj_get_child(charging_status_box, 0);
     bool was_charging = lv_label_get_text(charging_status_label) == stop_charging_string;
     lv_label_set_text_static(charging_status_label, was_charging ? start_charging_string : stop_charging_string);
+    lv_obj_set_style_bg_color(charging_status_box, was_charging ? lv_color_make(0x90, 0xff, 0x90) : lv_color_make(0xff, 0x00, 0x00), 0);
+    lv_obj_set_style_bg_opa(charging_status_box, was_charging ? LV_OPA_80 : LV_OPA_70, 0);
+    if(was_charging) {
+        lv_label_set_text_static(g_top_label, "Charging Paused");
+        toggle_ev_charging(PAUSED);   
+    }
+    else {
+        lv_label_set_text_static(g_top_label, "Charging");
+        toggle_ev_charging(RESUMED);   
+    }
 
     lv_obj_t * widget = lv_obj_get_parent(lv_obj_get_parent(charging_status_box));
     lv_obj_set_style_bg_image_src(widget, c->imgs[was_charging ? IMG_EV_CHARGING_WIDGET3_1_BG : IMG_EV_CHARGING_WIDGET3_BG],
