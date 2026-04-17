@@ -41,6 +41,7 @@ lv_obj_t * g_charging_status_box;
 lv_obj_t * g_charging_widget;
 lv_obj_t * g_charging_button_label;
 lv_obj_t * g_base_obj;
+lv_obj_t * g_wire_pulse;
 lv_demo_high_res_ctx_t * g_c;
 
 /**********************
@@ -59,6 +60,8 @@ typedef struct {
     lv_obj_t * driving_range_label;
     lv_obj_t * widget3;
     lv_obj_t * charging_status_label;
+    lv_obj_t * wire_pulse;
+    lv_anim_t wire_pulse_anim;
 } anim_state_t;
 
 /**********************
@@ -67,6 +70,9 @@ typedef struct {
 
 static void bg_cont_delete_cb(lv_event_t * e);
 static void base_obj_delete_cb(lv_event_t * e);
+static void wire_pulse_anim_cb(void * var, int32_t v);
+static void start_wire_pulse_anim(lv_obj_t * wire_pulse);
+static void stop_wire_pulse_anim(lv_obj_t * wire_pulse);
 static void anim_state_apply(anim_state_t * anim_state, int32_t v);
 static void anim_exec_cb(void * var, int32_t v);
 static void anim_completed_cb(lv_anim_t * a);
@@ -77,7 +83,7 @@ static void create_widget2(lv_demo_high_res_ctx_t * c, lv_obj_t * widgets);
 static lv_obj_t * create_widget3_info(lv_demo_high_res_ctx_t * c, lv_obj_t * parent, const lv_image_dsc_t * img_dsc,
                                       const char * text, const char * unit);
 static void create_widget3(lv_demo_high_res_ctx_t * c, lv_obj_t * widgets);
-static void prepare_default_anim(lv_anim_t * a, int32_t start_v, lv_obj_t * base_obj);
+static void prepare_default_anim(lv_anim_t * a, int32_t start_v, int32_t end_v, lv_obj_t * base_obj);
 static void charging_status_box_clicked_cb(lv_event_t * e);
 
 /**********************
@@ -111,6 +117,16 @@ void lv_demo_high_res_app_ev_charging(lv_obj_t * base_obj)
     lv_subject_add_observer_obj(&c->th, lv_demo_high_res_theme_observer_image_src_cb, bg_img,
                                 &c->imgs[IMG_LIGHT_BG_EV_CHARGING]);
 
+    /* Wire pulse effect overlay */
+    lv_obj_t * wire_pulse = lv_obj_create(bg);
+    lv_obj_remove_style_all(wire_pulse);
+    lv_obj_set_size(wire_pulse, 4, 80);
+    lv_obj_set_style_bg_color(wire_pulse, lv_color_make(0x00, 0xff, 0xff), 0);
+    lv_obj_set_style_bg_opa(wire_pulse, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_radius(wire_pulse, 2, 0);
+    lv_obj_align(wire_pulse, LV_ALIGN_RIGHT_MID, -50, 20);
+    g_wire_pulse = wire_pulse;
+
     lv_obj_t * bg_cont = lv_obj_create(bg);
     lv_obj_remove_style_all(bg_cont);
     lv_obj_set_size(bg_cont, LV_PCT(100), LV_PCT(100));
@@ -136,6 +152,7 @@ void lv_demo_high_res_app_ev_charging(lv_obj_t * base_obj)
         LV_ASSERT_MALLOC(anim_state);
         lv_obj_add_event_cb(base_obj, base_obj_delete_cb, LV_EVENT_DELETE, anim_state);
     }
+    anim_state->wire_pulse = wire_pulse;
     lv_obj_set_user_data(bg_cont, anim_state);
 
     /* top margin */
@@ -177,6 +194,11 @@ void lv_demo_high_res_app_ev_charging(lv_obj_t * base_obj)
     create_widget3(c, widgets);
 
     anim_state_apply(anim_state, lv_subject_get_int(&c->ev_charging_progress));
+
+    /* Start wire pulse if charging */
+    if(strcmp(curr_ev_state, "Charging") == 0 || strcmp(curr_ev_state, "WaitingForEnergy") == 0) {
+        start_wire_pulse_anim(anim_state->wire_pulse);
+    }
 }
 
 /**********************
@@ -197,6 +219,35 @@ static void base_obj_delete_cb(lv_event_t * e)
     lv_free(anim_state);
 }
 
+static void wire_pulse_anim_cb(void * var, int32_t v)
+{
+    lv_obj_t * wire_pulse = var;
+    lv_obj_set_style_bg_opa(wire_pulse, v, 0);
+}
+
+static void start_wire_pulse_anim(lv_obj_t * wire_pulse)
+{
+    if(!wire_pulse) return;
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, wire_pulse);
+    lv_anim_set_exec_cb(&a, wire_pulse_anim_cb);
+    lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_80);
+    lv_anim_set_duration(&a, 800);
+    lv_anim_set_playback_duration(&a, 800);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&a);
+}
+
+static void stop_wire_pulse_anim(lv_obj_t * wire_pulse)
+{
+    if(!wire_pulse) return;
+
+    lv_anim_delete(wire_pulse, wire_pulse_anim_cb);
+    lv_obj_set_style_bg_opa(wire_pulse, LV_OPA_TRANSP, 0);
+}
+
 static void anim_state_apply(anim_state_t * anim_state, int32_t v)
 {
     int32_t v_range_100 = lv_map(v, 0, EV_CHARGING_RANGE_END, 0, 100);
@@ -204,15 +255,23 @@ static void anim_state_apply(anim_state_t * anim_state, int32_t v)
     lv_arc_set_value(anim_state->arc, v_range_100);
 
     int32_t v_range_spent = lv_map(v, 0, EV_CHARGING_RANGE_END, 96, 176);
-    lv_label_set_text_fmt(anim_state->spent_label_large, "$%"LV_PRId32, v_range_spent);
-    char buf[32];
-    lv_snprintf(buf, sizeof(buf), "$%"LV_PRId32" - ", v_range_spent);
-    lv_spangroup_set_span_text(anim_state->spent_spangroup_small,
-                               lv_spangroup_get_child(anim_state->spent_spangroup_small, 0), buf);
-    lv_label_set_text_fmt(anim_state->saved_label, "$%"LV_PRId32, 340 - v_range_spent);
+    if(anim_state->spent_label_large) {
+        lv_label_set_text_fmt(anim_state->spent_label_large, "$%"LV_PRId32, v_range_spent);
+    }
+    if(anim_state->spent_spangroup_small) {
+        char buf[32];
+        lv_snprintf(buf, sizeof(buf), "$%"LV_PRId32" - ", v_range_spent);
+        lv_spangroup_set_span_text(anim_state->spent_spangroup_small,
+                                   lv_spangroup_get_child(anim_state->spent_spangroup_small, 0), buf);
+    }
+    if(anim_state->saved_label) {
+        lv_label_set_text_fmt(anim_state->saved_label, "$%"LV_PRId32, 340 - v_range_spent);
+    }
 
     int32_t v_range_charged = lv_map(v, 0, EV_CHARGING_RANGE_END, 640, 683);
-    lv_label_set_text_fmt(anim_state->charged_label, "%"LV_PRId32, v_range_charged);
+    if(anim_state->charged_label) {
+        lv_label_set_text_fmt(anim_state->charged_label, "%"LV_PRId32, v_range_charged);
+    }
 
     int32_t v_range_time_to_full = lv_map(v, 0, EV_CHARGING_RANGE_END, 72, 0);
     int32_t whole = v_range_time_to_full / 10;
@@ -245,12 +304,8 @@ static void anim_exec_cb(void * var, int32_t v)
 
 static void anim_completed_cb(lv_anim_t * a)
 {
-    lv_obj_t * base_obj = lv_anim_get_user_data(a);
-    lv_anim_t new_a;
-    prepare_default_anim(&new_a, 0, base_obj);
-    lv_anim_set_delay(&new_a, 1000);
-    lv_anim_set_early_apply(&new_a, false);
-    lv_anim_start(&new_a);
+    // Animation complete - don't restart
+    // Charging session finished, animation stays at final value
 }
 
 static void back_clicked_cb(lv_event_t * e)
@@ -510,24 +565,59 @@ static lv_obj_t * create_widget3_info(lv_demo_high_res_ctx_t * c, lv_obj_t * par
 
 void update_widget3(void)
 {
-    if(strcmp(curr_ev_state, "Charging") == 0 || strcmp(curr_ev_state, "WaitingForEnergy") == 0) {
+    // States for EV detection/authorization phase
+    if(strcmp(curr_ev_state, "sounding") == 0 || strcmp(curr_ev_state, "MatchingStarted") == 0 ||
+       strcmp(curr_ev_state, "MatchingSuccessful") == 0 || strcmp(curr_ev_state, "PluggedIn") == 0 ||
+       strcmp(curr_ev_state, "BCDone") == 0 || strcmp(curr_ev_state, "PrepareCharging") == 0 ||
+       strcmp(curr_ev_state, "Authorized") == 0) {
 
-        lv_label_set_text_static(g_top_label, "Charging");
+        lv_label_set_text_static(g_top_label, "Detecting EV");
+        lv_obj_set_style_bg_color(g_charging_status_box, lv_color_make(0xff, 0xa5, 0x00), 0); // Orange color
+        lv_obj_set_style_bg_opa(g_charging_status_box, LV_OPA_70, 0);
+        lv_label_set_text_static(g_charging_button_label, "Detecting...");
+        lv_obj_remove_flag(g_charging_status_box, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_remove_flag(g_charging_status_box, LV_OBJ_FLAG_CLICKABLE); // Not clickable during detection
+        lv_obj_set_style_bg_image_src(g_charging_widget, g_c->imgs[IMG_EV_CHARGING_WIDGET3_1_BG], 0);
+
+        //Stop Animation during detection
+        lv_anim_delete(g_base_obj, anim_exec_cb);
+        stop_wire_pulse_anim(g_wire_pulse);
+
+    }
+    // States for active charging
+    else if(strcmp(curr_ev_state, "Charging") == 0 || strcmp(curr_ev_state, "WaitingForEnergy") == 0) {
+
+        lv_label_set_text_static(g_top_label, "Charging EV");
         lv_obj_set_style_bg_color(g_charging_status_box, lv_color_make(0xff, 0x00, 0x00), 0); // Red color
         lv_obj_set_style_bg_opa(g_charging_status_box, LV_OPA_70, 0);
         lv_label_set_text_static(g_charging_button_label, "Pause Charging");
         lv_obj_remove_flag(g_charging_status_box, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(g_charging_status_box, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_bg_image_src(g_charging_widget, g_c->imgs[IMG_EV_CHARGING_WIDGET3_BG], 0);
-        
-        //Start Animation
-        int32_t start_v = lv_subject_get_int(&g_c->ev_charging_progress);
-        if(start_v >= EV_CHARGING_RANGE_END) start_v = 0;
-        lv_anim_t a;
-        prepare_default_anim(&a, start_v, g_base_obj);
-        lv_anim_start(&a);
 
-    } else if(strcmp(curr_ev_state, "ChargingPausedEV") == 0 || strcmp(curr_ev_state, "ChargingPausedEVSE") == 0) {
+        //Start Animation with random start (7-18%) and end (93-100%)
+        bool anim_running = (lv_anim_get(g_base_obj, anim_exec_cb) != NULL);
+        if(!anim_running) {
+            // Generate random start value (7-18% of EV_CHARGING_RANGE_END)
+            int32_t start_v = (EV_CHARGING_RANGE_END * 7 / 100) +
+                             (lv_rand(0, 11) * EV_CHARGING_RANGE_END / 100); // 7% + random(0-11)%
+
+            // Generate random end value (93-100% of EV_CHARGING_RANGE_END)
+            int32_t end_v = (EV_CHARGING_RANGE_END * 93 / 100) +
+                           (lv_rand(0, 7) * EV_CHARGING_RANGE_END / 100); // 93% + random(0-7)%
+
+            // Set initial progress value
+            lv_subject_set_int(&g_c->ev_charging_progress, start_v);
+
+            lv_anim_t a;
+            prepare_default_anim(&a, start_v, end_v, g_base_obj);
+            lv_anim_start(&a);
+        }
+        start_wire_pulse_anim(g_wire_pulse);
+
+    }
+    // Paused states
+    else if(strcmp(curr_ev_state, "ChargingPausedEV") == 0 || strcmp(curr_ev_state, "ChargingPausedEVSE") == 0) {
 
         lv_label_set_text_static(g_top_label, "Charging Paused");
         lv_obj_set_style_bg_color(g_charging_status_box, lv_color_make(0x90, 0xff, 0x90), 0); // Green color
@@ -539,9 +629,13 @@ void update_widget3(void)
 
         //Stop Animation
         lv_anim_delete(g_base_obj, anim_exec_cb);
+        stop_wire_pulse_anim(g_wire_pulse);
 
-    } else if(strcmp(curr_ev_state, "Finished") == 0 || strcmp(curr_ev_state, "FinishedEV") == 0
-                || strcmp(curr_ev_state, "FinishedEVSE") == 0) {
+    }
+    // Finished/Complete states
+    else if(strcmp(curr_ev_state, "Finished") == 0 || strcmp(curr_ev_state, "FinishedEV") == 0 ||
+            strcmp(curr_ev_state, "FinishedEVSE") == 0) {
+
         lv_label_set_text_static(g_top_label, "Charging Complete");
         lv_obj_set_style_bg_color(g_charging_status_box, lv_color_make(0x1e, 0x90, 0xff), 0); // Dodger blue color
         lv_obj_set_style_bg_opa(g_charging_status_box, LV_OPA_70, 0);
@@ -550,8 +644,11 @@ void update_widget3(void)
 
         //Stop Animation
         lv_anim_delete(g_base_obj, anim_exec_cb);
+        stop_wire_pulse_anim(g_wire_pulse);
 
-    } else {
+    }
+    // Default case - hide button for unknown/unplugged states
+    else {
 
         lv_obj_add_flag(g_charging_status_box, LV_OBJ_FLAG_HIDDEN); // Hide the widget
 
@@ -575,6 +672,8 @@ static void create_widget3(lv_demo_high_res_ctx_t * c, lv_obj_t * widgets)
                                   0);
     anim_state->widget3 = widget;
     g_charging_widget = widget;
+
+    // curr_ev_state already initialized to "Unplugged" in evse.c
 
     lv_obj_t * top_label = lv_label_create(widget); 
     lv_label_set_text_static(top_label, curr_ev_state);
@@ -636,11 +735,11 @@ static void create_widget3(lv_demo_high_res_ctx_t * c, lv_obj_t * widgets)
     update_widget3();
 }
 
-static void prepare_default_anim(lv_anim_t * a, int32_t start_v, lv_obj_t * base_obj)
+static void prepare_default_anim(lv_anim_t * a, int32_t start_v, int32_t end_v, lv_obj_t * base_obj)
 {
     lv_anim_init(a);
-    lv_anim_set_values(a, start_v, EV_CHARGING_RANGE_END);
-    lv_anim_set_duration(a, (EV_CHARGING_RANGE_END - start_v) * 5);
+    lv_anim_set_values(a, start_v, end_v);
+    lv_anim_set_duration(a, 45000); // Fixed 45 seconds for charging
     lv_anim_set_exec_cb(a, anim_exec_cb);
     lv_anim_set_completed_cb(a, anim_completed_cb);
     lv_anim_set_var(a, base_obj);
@@ -652,6 +751,7 @@ static void charging_status_box_clicked_cb(lv_event_t * e)
     lv_obj_t * bg_cont = lv_event_get_user_data(e);
     lv_obj_t * base_obj = lv_obj_get_parent(bg_cont);
     lv_demo_high_res_ctx_t * c = lv_obj_get_user_data(base_obj);
+    anim_state_t * anim_state = lv_obj_get_user_data(bg_cont);
     lv_obj_t * charging_status_box = lv_event_get_target_obj(e);
     lv_obj_t * charging_status_label = lv_obj_get_child(charging_status_box, 0);
     bool was_charging = lv_label_get_text(charging_status_label) == stop_charging_string;
@@ -660,11 +760,13 @@ static void charging_status_box_clicked_cb(lv_event_t * e)
     lv_obj_set_style_bg_opa(charging_status_box, was_charging ? LV_OPA_80 : LV_OPA_70, 0);
     if(was_charging) {
         lv_label_set_text_static(g_top_label, "Charging Paused");
-        toggle_ev_charging(PAUSED);   
+        toggle_ev_charging(PAUSED);
+        system("systemctl stop secc");   
     }
     else {
         lv_label_set_text_static(g_top_label, "Charging");
-        toggle_ev_charging(RESUMED);   
+        toggle_ev_charging(RESUMED);
+        system("systemctl start secc");   
     }
 
     lv_obj_t * widget = lv_obj_get_parent(lv_obj_get_parent(charging_status_box));
@@ -673,14 +775,19 @@ static void charging_status_box_clicked_cb(lv_event_t * e)
 
     if(was_charging) {
         lv_anim_delete(base_obj, anim_exec_cb);
+        stop_wire_pulse_anim(anim_state->wire_pulse);
     }
     else {
         int32_t start_v = lv_subject_get_int(&c->ev_charging_progress);
-        if(start_v >= EV_CHARGING_RANGE_END) start_v = 0;
+
+        // Resume with random end value (93-100%)
+        int32_t end_v = (EV_CHARGING_RANGE_END * 93 / 100) +
+                       (lv_rand(0, 7) * EV_CHARGING_RANGE_END / 100);
 
         lv_anim_t a;
-        prepare_default_anim(&a, start_v, base_obj);
+        prepare_default_anim(&a, start_v, end_v, base_obj);
         lv_anim_start(&a);
+        start_wire_pulse_anim(anim_state->wire_pulse);
     }
 }
 

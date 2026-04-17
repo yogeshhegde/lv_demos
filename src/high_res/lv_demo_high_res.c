@@ -47,7 +47,8 @@ lv_demo_high_res_api_t * lv_demo_high_res(const char * assets_path,
     if(logo_path == NULL) logo_path = "lvgl/demos/high_res/assets/img_lv_demo_high_res_lvgl_logo.png";
     if(slides_path == NULL) slides_path = "about_app_slides";
     lv_obj_t * base_obj = lv_demo_high_res_base_obj_create(assets_path, logo_path, slides_path, exit_cb);
-    lv_demo_high_res_home(base_obj);
+    //lv_demo_high_res_home(base_obj);
+    lv_demo_high_res_app_ev_charging(base_obj);
 
     lv_demo_high_res_ctx_t * c = lv_obj_get_user_data(base_obj);
     return &c->api;
